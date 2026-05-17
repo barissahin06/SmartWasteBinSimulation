@@ -14,6 +14,7 @@
 #include "LoRaApp/LoRaAppPacket_m.h"
 #include "LoRa/LoRaTagInfo_m.h"
 #include "LoRa/LoRaRadio.h"
+#include "SmartBinPayload_m.h"
 
 using namespace omnetpp;
 using namespace inet;
@@ -40,6 +41,23 @@ class SmartBinLoRaApp : public cSimpleModule, public ILifecycle
     bool criticalSent = false;
     bool overflowSent = false;
 
+    bool warningDetected = false;
+    bool criticalDetected = false;
+    bool overflowDetected = false;
+
+    simtime_t firstWarningTime = 0;
+    simtime_t firstCriticalTime = 0;
+    simtime_t firstOverflowTime = 0;
+
+    int statusUpdatePacketsSent = 0;
+    int thresholdWarningPacketsSent = 0;
+    int thresholdCriticalPacketsSent = 0;
+    int overflowAlertPacketsSent = 0;
+
+    int warningThresholdDetections = 0;
+    int criticalThresholdDetections = 0;
+    int overflowDetections = 0;
+
     int sentPackets = 0;
     int receivedPackets = 0;
     int numberOfPacketsToSend = 0;
@@ -64,7 +82,9 @@ class SmartBinLoRaApp : public cSimpleModule, public ILifecycle
 
     void handleGrowthEvent();
     void handleReportEvent();
-    void sendBinPacket(const char *name, int kind);
+    bool sendBinPacket(const char *name, int kind);
+    int getLegacySampleMeasurement(int kind) const;
+    void countSentPacket(int kind);
 
     void setSF(int sf);
     int getSF();

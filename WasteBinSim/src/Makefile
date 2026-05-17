@@ -33,10 +33,10 @@ PROJECTRELATIVE_PATH = src
 O = $(PROJECT_OUTPUT_DIR)/$(CONFIGNAME)/$(PROJECTRELATIVE_PATH)
 
 # Object files for local .cc, .msg and .sm files
-OBJS = $O/SmartBinLoRaApp.o
+OBJS = $O/SmartBinLoRaApp.o $O/SmartBinPayload_m.o
 
 # Message files
-MSGFILES =
+MSGFILES = SmartBinPayload.msg
 
 # SM files
 SMFILES =

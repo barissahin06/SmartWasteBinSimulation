@@ -9,8 +9,9 @@ bool SmartBinLoRaApp::globalEndScheduled = false;
 
 enum BinMessageKinds {
     STATUS_UPDATE = 1,
-    THRESHOLD_ALERT = 2,
-    OVERFLOW_ALERT = 3
+    THRESHOLD_WARNING = 2,
+    THRESHOLD_CRITICAL = 3,
+    OVERFLOW_ALERT = 4
 };
 
 void SmartBinLoRaApp::initialize(int stage)
@@ -110,15 +111,33 @@ void SmartBinLoRaApp::handleGrowthEvent()
        << " fill level increased to " << fillLevel
        << " zone=" << zoneType << "\n";
 
-    /*
-     * Important:
-     * Only one LoRa packet is generated in one growth event.
-     * Otherwise, warning + critical + overflow may be sent at the same simulation time,
-     * and LoRaRadio may throw "already transmitting" error.
-     */
-    if (!overflowSent && fillLevel >= maxCapacity) {
+    bool warningReached = fillLevel >= warningThreshold;
+    bool criticalReached = fillLevel >= criticalThreshold;
+    bool overflowReached = fillLevel >= maxCapacity;
+
+    if (warningReached && !warningDetected) {
+        warningDetected = true;
+        firstWarningTime = simTime();
+        warningThresholdDetections++;
+    }
+
+    if (criticalReached && !criticalDetected) {
+        criticalDetected = true;
+        firstCriticalTime = simTime();
+        criticalThresholdDetections++;
+    }
+
+    if (overflowReached && !overflowDetected) {
+        overflowDetected = true;
+        firstOverflowTime = simTime();
+        overflowDetections++;
+    }
+
+    if (overflowReached && !overflowSent) {
         sendBinPacket("overflowAlert", OVERFLOW_ALERT);
         overflowSent = true;
+        criticalSent = true;
+        warningSent = true;
 
         globalOverflowAlerts++;
 
@@ -138,12 +157,13 @@ void SmartBinLoRaApp::handleGrowthEvent()
             scheduleAt(simTime() + par("autoStopDelay"), endTimer);
         }
     }
-    else if (!criticalSent && fillLevel >= criticalThreshold) {
-        sendBinPacket("thresholdCritical", THRESHOLD_ALERT);
+    else if (!overflowSent && criticalReached && !criticalSent) {
+        sendBinPacket("thresholdCritical", THRESHOLD_CRITICAL);
         criticalSent = true;
+        warningSent = true;
     }
-    else if (!warningSent && fillLevel >= warningThreshold) {
-        sendBinPacket("thresholdWarning", THRESHOLD_ALERT);
+    else if (!overflowSent && warningReached && !warningSent) {
+        sendBinPacket("thresholdWarning", THRESHOLD_WARNING);
         warningSent = true;
     }
 
@@ -156,29 +176,30 @@ void SmartBinLoRaApp::handleReportEvent()
     scheduleAt(simTime() + par("reportInterval"), reportTimer);
 }
 
-void SmartBinLoRaApp::sendBinPacket(const char *name, int kind)
+bool SmartBinLoRaApp::sendBinPacket(const char *name, int kind)
 {
     if (simTime() < nextAllowedSendTime) {
         EV << "LoRa bin " << binId
            << " skipped " << name
            << " because radio is still in recent transmission period.\n";
-        return;
+        return false;
     }
 
     nextAllowedSendTime = simTime() + minSendGap;
     auto pkt = new Packet(name);
     pkt->setKind(flora::DATA);
 
-    auto payload = makeShared<flora::LoRaAppPacket>();
+    auto payload = makeShared<SmartBinPayload>();
     payload->setChunkLength(B(par("dataSize").intValue()));
-
-    /*
-     * We encode waste-bin message type in sampleMeasurement:
-     * 1 = status update
-     * 2 = threshold alert
-     * 3 = overflow alert
-     */
-    payload->setSampleMeasurement(kind);
+    payload->setSampleMeasurement(getLegacySampleMeasurement(kind));
+    payload->setBinId(binId);
+    payload->setZoneType(zoneType.c_str());
+    payload->setMessageKind(kind);
+    payload->setFillLevel(fillLevel);
+    payload->setMaxCapacity(maxCapacity);
+    payload->setWarningThreshold(warningThreshold);
+    payload->setCriticalThreshold(criticalThreshold);
+    payload->setEventTime(simTime());
 
     auto loraTag = pkt->addTagIfAbsent<flora::LoRaTag>();
     loraTag->setBandwidth(getBW());
@@ -192,13 +213,38 @@ void SmartBinLoRaApp::sendBinPacket(const char *name, int kind)
     send(pkt, "socketOut");
 
     sentPackets++;
+    countSentPacket(kind);
     emit(appPacketSentSignal, kind);
 
     EV << "LoRa bin " << binId
        << " sent " << name
        << " kind=" << kind
+       << " binId=" << binId
        << " fillLevel=" << fillLevel
        << " zone=" << zoneType << "\n";
+
+    return true;
+}
+
+int SmartBinLoRaApp::getLegacySampleMeasurement(int kind) const
+{
+    if (kind == STATUS_UPDATE)
+        return 1;
+    if (kind == OVERFLOW_ALERT)
+        return 3;
+    return 2;
+}
+
+void SmartBinLoRaApp::countSentPacket(int kind)
+{
+    if (kind == STATUS_UPDATE)
+        statusUpdatePacketsSent++;
+    else if (kind == THRESHOLD_WARNING)
+        thresholdWarningPacketsSent++;
+    else if (kind == THRESHOLD_CRITICAL)
+        thresholdCriticalPacketsSent++;
+    else if (kind == OVERFLOW_ALERT)
+        overflowAlertPacketsSent++;
 }
 
 void SmartBinLoRaApp::finish()
@@ -209,6 +255,16 @@ void SmartBinLoRaApp::finish()
     recordScalar("warningSent", warningSent ? 1 : 0);
     recordScalar("criticalSent", criticalSent ? 1 : 0);
     recordScalar("overflowSent", overflowSent ? 1 : 0);
+    recordScalar("statusUpdatePacketsSent", statusUpdatePacketsSent);
+    recordScalar("thresholdWarningPacketsSent", thresholdWarningPacketsSent);
+    recordScalar("thresholdCriticalPacketsSent", thresholdCriticalPacketsSent);
+    recordScalar("overflowAlertPacketsSent", overflowAlertPacketsSent);
+    recordScalar("warningThresholdDetections", warningThresholdDetections);
+    recordScalar("criticalThresholdDetections", criticalThresholdDetections);
+    recordScalar("overflowDetections", overflowDetections);
+    recordScalar("firstWarningTime", warningDetected ? firstWarningTime.dbl() : -1);
+    recordScalar("firstCriticalTime", criticalDetected ? firstCriticalTime.dbl() : -1);
+    recordScalar("firstOverflowTime", overflowDetected ? firstOverflowTime.dbl() : -1);
 
     if (binId == 0) {
         recordScalar("globalOverflowAlerts", globalOverflowAlerts);
