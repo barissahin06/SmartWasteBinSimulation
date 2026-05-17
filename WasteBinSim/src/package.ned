@@ -1,0 +1,3 @@
+package wastebinsim;
+
+@license(LGPL);
