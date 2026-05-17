@@ -1,6 +1,6 @@
 # Smart Waste Bin Simulation
 
-Interim project for CNG 476, focused on simulating a LoRa-based smart waste bin monitoring system in OMNeT++.
+Final project for CNG 476, focused on simulating a LoRa-based smart waste bin monitoring system in OMNeT++.
 
 ## Authors
 
